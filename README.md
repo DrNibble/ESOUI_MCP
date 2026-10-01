@@ -3,10 +3,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io/)
+[![Transport: stdio + HTTP/SSE](https://img.shields.io/badge/transport-stdio%20%2B%20HTTP%2FSSE-orange)](https://modelcontextprotocol.io/)
+[![HTML Parser: Cheerio](https://img.shields.io/badge/HTML%20parser-Cheerio-green)](https://cheerio.js.org/)
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for **Elder Scrolls Online addon development**. Gives AI assistants deep, up-to-date knowledge of the ESO API, equipment sets, addon rules, and code generation — across 42 tools in 10 modules.
 
-Works with **Claude Desktop, Claude Code, Cursor, VS Code Copilot, Windsurf, Cline**, and any MCP-compatible client.
+Works with **Claude Desktop, Claude Code, Cursor, VS Code Copilot, Windsurf, Cline**, and any MCP-compatible client. Supports both **stdio** and **HTTP/SSE** transports.
 
 ---
 
@@ -63,61 +65,88 @@ After every ESO patch, a single `update_database` call pulls fresh data from UES
 
 - [Node.js](https://nodejs.org/) 18+
 - An MCP-compatible AI client
+- On ARM devices (Raspberry Pi, DietPi, etc.): native build toolchain for `better-sqlite3`
 
 ### Installation
 
 ```bash
-git clone https://github.com/Virus250188/ESOUI_MCP.git
+git clone https://github.com/DrNibble/ESOUI_MCP.git
 cd ESOUI_MCP/mcp-server
 npm install
 npm run build
 ```
 
-### First Run — Automatic Data Import
+#### ARM / Raspberry Pi / DietPi
 
-On first start, the server automatically downloads ESO API data from UESP (~30 seconds):
+`better-sqlite3` requires native compilation. If `npm install` blocks install scripts or the build fails:
+
+```bash
+# Install build toolchain
+sudo apt update
+sudo apt install -y build-essential python3 make g++ pkg-config libsqlite3-dev
+
+# Approve and rebuild native modules
+npm install-scripts approve better-sqlite3
+npm rebuild better-sqlite3
+
+# Then build the project
+npm run build
+```
+
+### First Run — Data Import
+
+On first start, the MCP server automatically loads API data from the bundled `eso-api-reference.json` (or downloads from UESP if the bundle is missing):
 
 ```bash
 npm start
 ```
 
-Then import the full set database:
+Then import the set database and API documentation from the project root:
 
 ```bash
-cd ..
+cd ..   # back to ESOUI_MCP root
+npm install                       # install root dependencies (better-sqlite3, cheerio, tsx)
 npx tsx scripts/import-all-sets.ts    # Import 704 sets from LibSets
-npx tsx scripts/import-api-docs.ts     # Import official API docs from GitHub
-npx tsx scripts/scrape-set-bonuses.ts  # Scrape set bonus descriptions (uses Cheerio)
+npx tsx scripts/import-api-docs.ts    # Download & import official API docs from GitHub (auto-downloads if missing)
+npx tsx scripts/scrape-set-bonuses.ts # Scrape set bonus descriptions from eso-hub.com (uses Cheerio)
 ```
 
-### Connect to Claude Desktop
+> `import-api-docs.ts` automatically downloads `ESOUIDocumentation.txt` from the [esoui/esoui](https://github.com/esoui/esoui) GitHub repository if it's not present locally.
 
-Add to `claude_desktop_config.json`:
+### Connect via stdio (local)
+
+For **Claude Desktop**, add to `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "eso-addon-dev": {
       "command": "node",
-      "args": ["/path/to/ESO_MCP/mcp-server/dist/index.js"]
+      "args": ["/path/to/ESOUI_MCP/mcp-server/dist/index.js"]
     }
   }
 }
 ```
 
-### Connect to Cursor / VS Code / Other MCP Clients
+For **Cursor / VS Code / other MCP clients**, configure the command:
 
-Configure the MCP server command: `node /path/to/ESO_MCP/mcp-server/dist/index.js`
+```
+node /path/to/ESOUI_MCP/mcp-server/dist/index.js
+```
 
-### HTTP/SSE Mode
+### Connect via HTTP/SSE (remote)
 
-The server can also run over HTTP using SSE (Server-Sent Events) or Streamable HTTP transport, enabling remote connections:
+The server can run over HTTP using SSE (Server-Sent Events) or Streamable HTTP transport, enabling remote connections from any MCP-compatible client.
 
 ```bash
 # SSE mode (default)
+npm run start:sse
+# or explicitly:
 node dist/index.js --http --port 3000
 
 # Streamable HTTP mode
+npm run start:streamable
+# or explicitly:
 node dist/index.js --http --mode streamable --port 3000
 
 # Bind to localhost only
@@ -130,16 +159,47 @@ Environment variables are also supported:
 MCP_TRANSPORT=http MCP_PORT=3000 MCP_MODE=sse node dist/index.js
 ```
 
-Endpoints:
+#### Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/sse` | GET | Establish SSE connection (SSE mode) |
-| `/sse` | POST | Send messages to server (SSE mode) |
-| `/mcp` | GET/POST/DELETE | Streamable HTTP (Streamable mode) |
-| `/health` | GET | Health check |
+| `/sse` | POST | Send JSON-RPC messages to server (SSE mode) |
+| `/mcp` | GET | SSE stream for server-to-client messages (Streamable mode) |
+| `/mcp` | POST | JSON-RPC request (Streamable mode) |
+| `/mcp` | DELETE | Close session (Streamable mode) |
+| `/health` | GET | Health check — returns server status |
 
-Connect from an MCP client using the SSE URL: `http://localhost:3000/sse`
+#### MCP client configuration (SSE mode)
+
+For clients that support SSE URLs, point them to:
+
+```
+http://<server-ip>:3000/sse
+```
+
+Example for Claude Desktop with a remote SSE server:
+
+```json
+{
+  "mcpServers": {
+    "eso-addon-dev": {
+      "url": "http://192.168.1.100:3000/sse"
+    }
+  }
+}
+```
+
+#### CLI options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--http` | `false` | Enable HTTP/SSE transport (default: stdio) |
+| `--port` | `3000` | HTTP server port |
+| `--host` | `0.0.0.0` | HTTP server bind address |
+| `--mode` | `sse` | Transport mode: `sse` or `streamable` |
+
+Equivalent environment variables: `MCP_TRANSPORT`, `MCP_PORT`, `MCP_HOST`, `MCP_MODE`.
 
 ---
 
@@ -234,13 +294,59 @@ Connect from an MCP client using the SSE URL: `http://localhost:3000/sse`
 
 ### Updating After an ESO Patch
 
+Ask your AI assistant in natural language, or call the tool directly:
+
 ```
 1. update_database({source: "api_uesp"})      → Fresh API data from UESP
-2. update_database({source: "api_docs"})      → API docs from GitHub
-3. update_database({source: "set_bonuses"})   → New/updated sets from eso-hub.com
+2. update_database({source: "api_docs"})      → API docs from GitHub (auto-downloads)
+3. update_database({source: "set_bonuses"})   → New/updated sets from eso-hub.com (via Cheerio)
 4. update_database({source: "sets"})          → Re-import from LibSets (update addon first)
 5. update_database({source: "status"})        → Verify what's loaded
 ```
+
+Or simply say: "Update everything" → the LLM calls `update_database({source: "all"})`.
+
+---
+
+## Architecture
+
+```
+ESOUI_MCP/
+├── mcp-server/
+│   ├── src/
+│   │   ├── index.ts              # Entry point — stdio or HTTP/SSE mode
+│   │   ├── database/
+│   │   │   ├── db.ts             # SQLite database layer
+│   │   │   └── schema.sql        # Database schema (FTS5 enabled)
+│   │   ├── services/
+│   │   │   ├── api-importer.ts    # UESP data fetch (native fetch, no Playwright)
+│   │   │   ├── lua-parser.ts      # Lua code analysis
+│   │   │   ├── path-validator.ts  # File access security
+│   │   │   └── savedvars-parser.ts
+│   │   ├── tools/                 # 10 tool modules (42 tools total)
+│   │   ├── transport/
+│   │   │   └── http-sse.ts        # HTTP/SSE + Streamable HTTP transport
+│   │   └── types/
+│   ├── dist/                      # Compiled output
+│   └── package.json               # cheerio, express, better-sqlite3, zod, MCP SDK
+├── scripts/
+│   ├── import-all-sets.ts         # LibSets → SQLite
+│   ├── import-api-docs.ts         # GitHub ESOUIDocumentation.txt → SQLite (auto-downloads)
+│   └── scrape-set-bonuses.ts      # eso-hub.com → SQLite (Cheerio, no browser needed)
+├── data/
+│   ├── eso_sets.db                # SQLite database (generated)
+│   ├── api/
+│   │   ├── eso-api-reference.json # Bundled API data (fast first start)
+│   │   └── ESOUIDocumentation.txt  # Downloaded on demand
+│   └── json/
+│       ├── sets.json              # LibSets export
+│       └── dlc_info.json
+└── docs/                          # Per-module documentation
+```
+
+### HTML Parsing with Cheerio
+
+Set bonus scraping and API data fetching use [Cheerio](https://cheerio.js.org/) — a fast, lightweight server-side HTML parser. No browser engine (Playwright/Chromium) is required, making the server easy to deploy on headless servers, ARM devices (Raspberry Pi, DietPi), and containers.
 
 ---
 
@@ -250,7 +356,8 @@ Connect from an MCP client using the SSE URL: `http://localhost:3000/sse`
 |--------|---------|-----------------|
 | [LibSets](https://www.esoui.com/downloads/info2241) by **Baertram** | Unlicense / Public Domain | Set data, zones, wayshrines, drop locations |
 | [UESP](https://esoapi.uesp.net/) | Open | API functions, events, constants |
-| [eso-hub.com](https://eso-hub.com/en/sets) | — | Set bonus descriptions |
+| [eso-hub.com](https://eso-hub.com/en/sets) | — | Set bonus descriptions (scraped via Cheerio) |
+| [ESOUI GitHub](https://github.com/esoui/esoui) | — | Official API documentation (ESOUIDocumentation.txt) |
 | [ESOUI Community Guidelines](https://www.esoui.com/forums/showthread.php?t=9867) | — | Addon development rules (31 MUST NOT rules) |
 
 ---
