@@ -640,17 +640,42 @@ function importToDatabase(
 
 // ===== Main =====
 
-function main() {
+async function main() {
   console.log('=== ESO API Documentation Importer ===');
-  console.log(`Source: ${DOCS_PATH}`);
+
+  // Download ESOUIDocumentation.txt from GitHub if missing or stale
+  const GITHUB_URL = 'https://raw.githubusercontent.com/esoui/esoui/live/ESOUIDocumentation.txt';
+  if (!fs.existsSync(DOCS_PATH)) {
+    console.log(`Documentation file not found. Downloading from GitHub...`);
+    console.log(`  URL: ${GITHUB_URL}`);
+    try {
+      const response = await fetch(GITHUB_URL, {
+        signal: AbortSignal.timeout(60000),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'text/plain, */*',
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      }
+      const text = await response.text();
+      if (text.length < 10000) {
+        throw new Error('Downloaded file seems too small - possible error page');
+      }
+      fs.mkdirSync(path.dirname(DOCS_PATH), { recursive: true });
+      fs.writeFileSync(DOCS_PATH, text, 'utf-8');
+      console.log(`  Downloaded ${text.length} bytes to ${DOCS_PATH}`);
+    } catch (err: any) {
+      console.error(`ERROR: Failed to download documentation: ${err.message}`);
+      process.exit(1);
+    }
+  } else {
+    console.log(`Source: ${DOCS_PATH}`);
+  }
+
   console.log(`Database: ${DB_PATH}`);
   console.log();
-
-  // Read the documentation file
-  if (!fs.existsSync(DOCS_PATH)) {
-    console.error(`ERROR: Documentation file not found: ${DOCS_PATH}`);
-    process.exit(1);
-  }
 
   const text = fs.readFileSync(DOCS_PATH, 'utf-8');
   const lines = text.split('\n').map(l => l.replace(/\r$/, ''));
@@ -729,4 +754,7 @@ function main() {
   console.log(`Events inserted (new): ${result.eventsInserted}`);
 }
 
-main();
+main().catch(err => {
+  console.error('Fatal error:', err);
+  process.exit(1);
+});
