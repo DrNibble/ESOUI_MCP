@@ -87,7 +87,7 @@ Then import the full set database:
 cd ..
 npx tsx scripts/import-all-sets.ts    # Import 704 sets from LibSets
 npx tsx scripts/import-api-docs.ts     # Import official API docs from GitHub
-npx tsx scripts/scrape-set-bonuses.ts  # Scrape set bonus descriptions (requires Playwright)
+npx tsx scripts/scrape-set-bonuses.ts  # Scrape set bonus descriptions (uses Cheerio)
 ```
 
 ### Connect to Claude Desktop
@@ -108,6 +108,38 @@ Add to `claude_desktop_config.json`:
 ### Connect to Cursor / VS Code / Other MCP Clients
 
 Configure the MCP server command: `node /path/to/ESO_MCP/mcp-server/dist/index.js`
+
+### HTTP/SSE Mode
+
+The server can also run over HTTP using SSE (Server-Sent Events) or Streamable HTTP transport, enabling remote connections:
+
+```bash
+# SSE mode (default)
+node dist/index.js --http --port 3000
+
+# Streamable HTTP mode
+node dist/index.js --http --mode streamable --port 3000
+
+# Bind to localhost only
+node dist/index.js --http --host 127.0.0.1 --port 8080
+```
+
+Environment variables are also supported:
+
+```bash
+MCP_TRANSPORT=http MCP_PORT=3000 MCP_MODE=sse node dist/index.js
+```
+
+Endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sse` | GET | Establish SSE connection (SSE mode) |
+| `/sse` | POST | Send messages to server (SSE mode) |
+| `/mcp` | GET/POST/DELETE | Streamable HTTP (Streamable mode) |
+| `/health` | GET | Health check |
+
+Connect from an MCP client using the SSE URL: `http://localhost:3000/sse`
 
 ---
 

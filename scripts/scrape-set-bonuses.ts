@@ -1,5 +1,5 @@
 /**
- * Scrape set bonus descriptions from eso-hub.com using Playwright.
+ * Scrape set bonus descriptions from eso-hub.com using Cheerio.
  * Populates the set_bonuses table in the SQLite database.
  *
  * Run with: npx tsx scripts/scrape-set-bonuses.ts
@@ -7,13 +7,13 @@
  * The eso-hub.com pages are Next.js rendered. The bonus text appears in the DOM
  * in a format like:
  *   (2 items) Adds 1096 Maximum Magicka(3 items) Adds 657 Critical Chance...
- * inside a tooltip-style card with class "text-center text-xs/5".
+ * inside a tooltip-style card.
  *
  * We split on the "(N items)" pattern to extract individual bonuses.
  */
 
 import Database from 'better-sqlite3';
-import { chromium, type Browser, type Page } from 'playwright';
+import * as cheerio from 'cheerio';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -110,109 +110,102 @@ interface BonusData {
 }
 
 /**
- * Extract bonuses from the page.
+ * Extract bonuses from the page HTML using Cheerio.
  * The eso-hub.com page contains bonus text in format:
  *   (2 items) Adds 1096 Maximum Magicka(3 items) Adds 657 Critical Chance...
  * We find elements containing "(N items)" and split on that pattern.
  */
-async function extractBonusesFromPage(page: Page): Promise<{ pieces: number; text: string }[]> {
-  return await page.evaluate(() => {
-    const results: { pieces: number; text: string }[] = [];
-    const seen = new Set<string>();
+function extractBonusesFromHtml(html: string): { pieces: number; text: string }[] {
+  const $ = cheerio.load(html);
+  const results: { pieces: number; text: string }[] = [];
+  const seen = new Set<string>();
 
-    // Find all elements whose text content contains "(N items)"
-    const allElements = document.querySelectorAll('*');
+  // Find all elements whose text content contains "(N items)"
+  $('*').each((_index, el) => {
+    const $el = $(el);
 
-    for (const el of allElements) {
-      // Skip container elements with lots of children (we want the most specific element)
-      if (el.children.length > 10) continue;
+    // Skip container elements with lots of children (we want the most specific element)
+    if ($el.children().length > 10) return;
 
-      const text = el.textContent?.trim() || '';
-      if (!text.includes('item)') && !text.includes('items)')) continue;
-      if (text.length > 2000) continue; // skip huge containers
+    const text = $el.text().trim();
+    if (!text.includes('item)') && !text.includes('items)')) return;
+    if (text.length > 2000) return; // skip huge containers
 
-      // Split on the "(N items)" pattern to get individual bonuses
-      // The text looks like: "(2 items) Adds 1096 Maximum Magicka(3 items) Adds 657 Critical Chance"
-      const parts = text.split(/\((\d)\s*items?\)/i);
+    // Split on the "(N items)" pattern to get individual bonuses
+    const parts = text.split(/\((\d)\s*items?\)/i);
 
-      // parts will be like: ["prefix...", "2", " Adds 1096 Maximum Magicka", "3", " Adds 657 ...", ...]
-      // The number is at odd indices, the description follows at even indices
-      for (let i = 1; i < parts.length; i += 2) {
-        const pieces = parseInt(parts[i], 10);
-        const desc = (parts[i + 1] || '').trim();
+    // parts will be like: ["prefix...", "2", " Adds 1096 Maximum Magicka", "3", " Adds 657 ...", ...]
+    for (let i = 1; i < parts.length; i += 2) {
+      const pieces = parseInt(parts[i], 10);
+      const desc = (parts[i + 1] || '').trim();
 
-        if (pieces >= 1 && pieces <= 12 && desc.length > 3 && desc.length < 500) {
-          // Clean up: remove trailing UI text and "(N items)" leftovers
-          let cleanDesc = desc
-            .replace(/\(\d\s*items?\).*$/i, '')
-            .replace(/\s*Compare this armor set with other sets.*/i, '')
-            .replace(/\s*Tooltips by ESO-Hub\.com.*/i, '')
-            .replace(/\s*ESO-Hub\.com.*/i, '')
-            .replace(/\s{2,}/g, ' ')
-            .trim();
-          if (cleanDesc.length > 3) {
-            const key = `${pieces}:${cleanDesc}`;
-            if (!seen.has(key)) {
-              seen.add(key);
-              results.push({ pieces, text: cleanDesc });
-            }
+      if (pieces >= 1 && pieces <= 12 && desc.length > 3 && desc.length < 500) {
+        let cleanDesc = desc
+          .replace(/\(\d\s*items?\).*$/i, '')
+          .replace(/\s*Compare this armor set with other sets.*/i, '')
+          .replace(/\s*Tooltips by ESO-Hub\.com.*/i, '')
+          .replace(/\s*ESO-Hub\.com.*/i, '')
+          .replace(/\s{2,}/g, ' ')
+          .trim();
+        if (cleanDesc.length > 3) {
+          const key = `${pieces}:${cleanDesc}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            results.push({ pieces, text: cleanDesc });
           }
         }
       }
     }
-
-    // Keep only the entries from the most specific (smallest) element
-    // to avoid duplicates from parent elements. We do this by keeping only
-    // the set of results that appears first (the deepest match).
-    // Actually, our dedup with `seen` handles this already -- but if we got
-    // bonuses from multiple tooltip cards on the same page (e.g., related sets),
-    // we only want the first set's bonuses. We'll keep all for now and let the
-    // caller decide.
-
-    return results;
   });
+
+  return results;
 }
 
-async function scrapeSetPage(page: Page, slug: string): Promise<BonusData[] | null> {
+/**
+ * Fetch a set page from eso-hub.com and extract bonuses using Cheerio.
+ */
+async function scrapeSetPage(slug: string): Promise<BonusData[] | null> {
   const url = `https://eso-hub.com/en/sets/${slug}`;
 
   try {
-    const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(30000),
+    });
 
-    if (!response || response.status() === 404) {
+    if (response.status === 404) {
       return null;
     }
 
-    // Wait for JS rendering - look for the tooltip card or give it time
-    try {
-      await page.waitForSelector('.watermark-bg, [class*="watermark"], [class*="set-info"]', { timeout: 8000 });
-    } catch {
-      // Fallback: just wait
-      await sleep(2000);
+    if (!response.ok) {
+      console.error(`  HTTP ${response.status} for ${url}`);
+      return null;
     }
 
-    const rawBonuses = await extractBonusesFromPage(page);
+    const html = await response.text();
+
+    // Check for Cloudflare challenge
+    if (html.includes('challenge-platform') || html.includes('Just a moment')) {
+      console.error(`  Cloudflare challenge detected for ${url}, skipping`);
+      return null;
+    }
+
+    const rawBonuses = extractBonusesFromHtml(html);
 
     if (rawBonuses.length === 0) {
       return null;
     }
 
-    // The page may show multiple sets (the main set + related sets in recommendations).
-    // We want only the FIRST set's bonuses - typically the ones that appear first.
-    // For most standard sets these are: 2pc, 3pc, 4pc, 5pc.
-    // For monster sets: 1pc, 2pc.
-    // For mythic: 1pc.
-    // We'll take bonuses that form a reasonable set (consecutive or matching expected pattern).
-    // The simplest heuristic: take the first N bonuses that have increasing/consistent piece counts.
-
-    // Group by pieces_required
+    // Group by pieces_required — take the first set of bonuses
     const firstOccurrence: BonusData[] = [];
     const seenPieces = new Set<number>();
 
     for (const b of rawBonuses) {
       if (seenPieces.has(b.pieces)) {
-        // We've hit a duplicate piece count, which likely means we're into
-        // the bonuses of a second set displayed on the page. Stop here.
         break;
       }
       seenPieces.add(b.pieces);
@@ -231,7 +224,7 @@ async function scrapeSetPage(page: Page, slug: string): Promise<BonusData[] | nu
   } catch (err: any) {
     if (
       err.message?.includes('net::ERR_') ||
-      err.message?.includes('Navigation timeout') ||
+      err.message?.includes('aborted') ||
       err.message?.includes('Timeout') ||
       err.message?.includes('ERR_CONNECTION')
     ) {
@@ -244,7 +237,7 @@ async function scrapeSetPage(page: Page, slug: string): Promise<BonusData[] | nu
 // ---- Main ----
 
 async function main() {
-  console.log('=== ESO Set Bonus Scraper ===');
+  console.log('=== ESO Set Bonus Scraper (Cheerio) ===');
   console.log(`Database: ${DB_PATH}\n`);
 
   // Open database
@@ -287,19 +280,11 @@ async function main() {
     return;
   }
 
-  // Launch browser ONCE
-  console.log('Launching browser...');
-  const browser: Browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  });
-  const page: Page = await context.newPage();
-
   // ---- Phase 1: Test with Mother's Sorrow ----
   console.log("\n--- Phase 1: Testing with Mother's Sorrow ---");
   const testSlug = 'mothers-sorrow';
 
-  const testBonuses = await scrapeSetPage(page, testSlug);
+  const testBonuses = await scrapeSetPage(testSlug);
   if (testBonuses && testBonuses.length > 0) {
     console.log(`SUCCESS: Found ${testBonuses.length} bonuses for Mother's Sorrow:`);
     for (const b of testBonuses) {
@@ -308,26 +293,8 @@ async function main() {
     console.log('');
   } else {
     console.log("FAILED: Could not extract bonuses for Mother's Sorrow.");
-    console.log('Dumping page content sample for debugging...');
-
-    const sample = await page.evaluate(() => {
-      const els = document.querySelectorAll('*');
-      const snippets: string[] = [];
-      for (const el of els) {
-        const t = el.textContent?.trim() || '';
-        if (t.includes('items)') && t.length < 500) {
-          snippets.push(`<${el.tagName} class="${el.className}"> ${t.substring(0, 200)}`);
-        }
-      }
-      return snippets.slice(0, 10);
-    });
-    for (const s of sample) {
-      console.log(`  ${s}`);
-    }
-
-    await browser.close();
+    console.log('Aborting: fix the selectors first.');
     db.close();
-    console.log('\nAborting: fix the selectors first.');
     return;
   }
 
@@ -345,7 +312,7 @@ async function main() {
     const slug = nameToSlug(set.name_en);
 
     try {
-      const bonuses = await scrapeSetPage(page, slug);
+      const bonuses = await scrapeSetPage(slug);
 
       if (bonuses && bonuses.length > 0) {
         // Insert bonuses into DB (commit after each set for resume support)
@@ -426,7 +393,7 @@ async function main() {
       let found = false;
       for (const altSlug of altSlugs) {
         try {
-          const bonuses = await scrapeSetPage(page, altSlug);
+          const bonuses = await scrapeSetPage(altSlug);
           if (bonuses && bonuses.length > 0) {
             const insertBatch = db.transaction((items: BonusData[]) => {
               for (const b of items) {
@@ -464,10 +431,6 @@ async function main() {
       }
     }
   }
-
-  // Close browser
-  await browser.close();
-  console.log('\nBrowser closed.');
 
   // Final stats
   const totalBonuses = (db.prepare('SELECT COUNT(*) as count FROM set_bonuses').get() as { count: number }).count;

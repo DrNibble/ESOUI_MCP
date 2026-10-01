@@ -1,7 +1,7 @@
 {
   "name": "eso-addon-dev-assistant",
   "version": "2.0.0",
-  "description": "ESO Addon Development Assistant - Complete MCP Server with 34 tools for ESO addon development",
+  "description": "ESO Addon Development Assistant - Complete MCP Server with 42 tools for ESO addon development",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -9,6 +9,9 @@
     "watch": "tsc --watch",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
+    "start:http": "node dist/index.js --http",
+    "start:sse": "node dist/index.js --http --mode sse",
+    "start:streamable": "node dist/index.js --http --mode streamable",
     "populate": "node --loader ts-node/esm ../scripts/populate-demo-data.ts"
   },
   "keywords": [
@@ -22,11 +25,13 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "better-sqlite3": "^11.8.1",
-    "playwright": "^1.58.2",
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.5",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",

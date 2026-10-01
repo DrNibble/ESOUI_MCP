@@ -32,7 +32,7 @@ const definitions = [
   {
     name: 'update_database',
     description:
-      'Update the MCP server database with fresh data. Use after an ESO patch to get new sets, API changes, etc. Options: "status" (check what data is loaded and when), "sets" (re-import sets from LibSets - requires updated LibSets addon), "set_bonuses" (scrape set bonus descriptions from eso-hub.com via Playwright browser), "api_docs" (re-download official API documentation from GitHub esoui/esoui), "api_uesp" (re-fetch functions/events/constants from UESP), "all" (update everything). NOTE: set_bonuses requires Playwright (chromium) and takes several minutes for 700+ sets. api_docs and api_uesp require internet access.',
+      'Update the MCP server database with fresh data. Use after an ESO patch to get new sets, API changes, etc. Options: "status" (check what data is loaded and when), "sets" (re-import sets from LibSets - requires updated LibSets addon), "set_bonuses" (scrape set bonus descriptions from eso-hub.com via Cheerio), "api_docs" (re-download official API documentation from GitHub esoui/esoui), "api_uesp" (re-fetch functions/events/constants from UESP), "all" (update everything). NOTE: set_bonuses uses Cheerio for HTML parsing and takes several minutes for 700+ sets. api_docs and api_uesp require internet access.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -84,7 +84,7 @@ function getStatus(): Record<string, any> {
     import_history: meta,
     update_sources: {
       sets: 'LibSets addon (addon_Libs/LibSets/) - update the addon first, then run update',
-      set_bonuses: 'eso-hub.com (scraped via Playwright browser)',
+      set_bonuses: 'eso-hub.com (scraped via Cheerio)',
       api_docs: 'GitHub esoui/esoui ESOUIDocumentation.txt (official ZOS docs)',
       api_uesp: 'UESP esoapi.uesp.net (community-maintained API dump)',
     },
@@ -232,7 +232,7 @@ async function handler(name: string, args: unknown): Promise<ToolResult> {
           results.set_bonuses = {
             success: true,
             sets_scraped: countMatch ? parseInt(countMatch[1]) : 'unknown',
-            note: 'Scraped from eso-hub.com via Playwright browser',
+            note: 'Scraped from eso-hub.com via Cheerio',
           };
         } catch (e: any) {
           errors.push(`Set bonuses scrape failed: ${e.message}`);

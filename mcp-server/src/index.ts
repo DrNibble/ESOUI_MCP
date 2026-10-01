@@ -24,6 +24,9 @@ import { updaterModule } from './tools/updater.js';
 // Import auto-import service
 import { ensureApiDataLoaded } from './services/api-importer.js';
 
+// Import HTTP/SSE transport
+import { startHttpSseServer } from './transport/http-sse.js';
+
 const server = new Server(
   {
     name: 'eso-addon-dev-assistant',
@@ -91,6 +94,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// Parse CLI arguments
+function parseArgs(): { http: boolean; port: number; host: string; mode: 'sse' | 'streamable' } {
+  const args = process.argv.slice(2);
+  const http = args.includes('--http') || args.includes('-H') || process.env.MCP_TRANSPORT === 'http';
+  const portIdx = args.indexOf('--port');
+  const port = portIdx !== -1 ? parseInt(args[portIdx + 1], 10) : parseInt(process.env.MCP_PORT || '3000', 10);
+  const hostIdx = args.indexOf('--host');
+  const host = hostIdx !== -1 ? args[hostIdx + 1] : (process.env.MCP_HOST || '0.0.0.0');
+  const modeIdx = args.indexOf('--mode');
+  const mode = (modeIdx !== -1 ? args[modeIdx + 1] : (process.env.MCP_MODE || 'sse')) as 'sse' | 'streamable';
+
+  return { http, port, host, mode };
+}
+
 async function main() {
   // Auto-import API data on first start
   try {
@@ -100,10 +117,18 @@ async function main() {
     console.error('Server will start without API reference data. You can try restarting later.');
   }
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error('ESO Addon Development Assistant MCP server running on stdio');
-  console.error(`Registered ${toolHandlerMap.size} tools from ${modules.length} modules`);
+  const { http, port, host, mode } = parseArgs();
+
+  if (http) {
+    // HTTP/SSE mode
+    startHttpSseServer(server, { port, host, mode });
+  } else {
+    // Default: stdio mode
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error('ESO Addon Development Assistant MCP server running on stdio');
+    console.error(`Registered ${toolHandlerMap.size} tools from ${modules.length} modules`);
+  }
 }
 
 main().catch((error) => {
@@ -111,7 +136,7 @@ main().catch((error) => {
   process.exit(1);
 });
 
-// Graceful shutdown - ensure DB is properly closed
+// Graceful shutdown - ensure DB is properly closed (for stdio mode)
 function shutdown() {
   console.error('Shutting down ESO MCP server...');
   try {

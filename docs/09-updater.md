@@ -20,7 +20,7 @@ The Updater module provides 1 tool for keeping the MCP server database up to dat
 |--------|-------------|-------------|----------|--------------|
 | `status` | Show current data status, counts, and import history | Local database | Instant | None |
 | `sets` | Re-import sets from LibSets addon | `addon_Libs/LibSets/` in project | ~30 seconds | Updated LibSets addon files |
-| `set_bonuses` | Scrape set bonus descriptions | eso-hub.com via Playwright browser | Several minutes (700+ sets) | Playwright (chromium) installed |
+| `set_bonuses` | Scrape set bonus descriptions | eso-hub.com via Cheerio | Several minutes (700+ sets) | Cheerio (included in dependencies) |
 | `api_docs` | Download official API documentation | GitHub `esoui/esoui` `ESOUIDocumentation.txt` | ~30 seconds | Internet access |
 | `api_uesp` | Fetch functions, events, constants | UESP `esoapi.uesp.net` | ~1-2 minutes | Internet access |
 | `all` | Run all of the above in sequence | All sources | 5-15 minutes | All requirements above |
@@ -68,7 +68,7 @@ The most common starting point. Shows what data is loaded, when it was imported,
   },
   "update_sources": {
     "sets": "LibSets addon (addon_Libs/LibSets/) - update the addon first, then run update",
-    "set_bonuses": "eso-hub.com (scraped via Playwright browser)",
+    "set_bonuses": "eso-hub.com (scraped via Cheerio)",
     "api_docs": "GitHub esoui/esoui ESOUIDocumentation.txt (official ZOS docs)",
     "api_uesp": "UESP esoapi.uesp.net (community-maintained API dump)"
   },
@@ -152,7 +152,7 @@ Scrapes set bonus descriptions from eso-hub.com using a headless browser. This p
     "set_bonuses": {
       "success": true,
       "sets_scraped": 669,
-      "note": "Scraped from eso-hub.com via Playwright browser"
+      "note": "Scraped from eso-hub.com via Cheerio"
     }
   },
   "current_status": {
@@ -167,7 +167,7 @@ Scrapes set bonus descriptions from eso-hub.com using a headless browser. This p
 
 **Prerequisites:**
 
-- Playwright (chromium) must be installed: `npx playwright install chromium`
+- Cheerio is used for HTML parsing (included in dependencies)
 - Internet access required.
 - This operation takes several minutes for 700+ sets.
 

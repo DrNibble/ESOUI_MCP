@@ -1,7 +1,7 @@
 /**
  * Auto-imports ESO API data from UESP on first server start.
  * Data is cached in SQLite - subsequent starts skip the import.
- * Uses Playwright as fallback when Cloudflare blocks normal fetch().
+ * Uses native fetch with browser-like headers.
  */
 
 import { db } from '../database/db.js';
@@ -14,62 +14,44 @@ const GLOBAL_FUNCS_URL = `${UESP_BASE}/globalfuncs.txt`;
 const GLOBALS_URL = `${UESP_BASE}/globals.txt`;
 
 /**
- * Fetch a URL, falling back to Playwright if Cloudflare blocks the request.
+ * Fetch a URL using native fetch with browser-like headers.
+ * Falls back to a retry on transient errors.
  */
 async function fetchWithCloudflareBypass(url: string): Promise<string> {
-  // Try normal fetch first
+  const headers: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/plain, text/html, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
+
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(60000) });
+
     if (response.ok) {
       const text = await response.text();
       // Check if we got Cloudflare challenge HTML instead of actual content
       if (text.includes('challenge-platform') || text.includes('Just a moment')) {
-        console.error(`Cloudflare challenge detected for ${url}, using Playwright...`);
-      } else {
-        return text;
+        console.error(`Cloudflare challenge detected for ${url}`);
+        throw new Error(`Cloudflare challenge at ${url} — cannot bypass without a browser engine`);
       }
+      return text;
     }
+
+    throw new Error(`HTTP ${response.status} ${response.statusText} for ${url}`);
   } catch {
-    console.error(`Normal fetch failed for ${url}, trying Playwright...`);
-  }
+    // Retry once with a delay
+    console.error(`First fetch failed for ${url}, retrying...`);
+    await new Promise(r => setTimeout(r, 3000));
 
-  // Fallback: use Playwright to bypass Cloudflare
-  const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    });
-    const page = await context.newPage();
-
-    console.error(`Playwright: navigating to ${url}...`);
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-
-    // Wait for Cloudflare challenge to resolve (up to 30s)
-    await page.waitForFunction(
-      `!document.title.includes('Just a moment')`,
-      { timeout: 30000 }
-    ).catch(() => {
-      // If title check doesn't work, just wait a bit
-    });
-
-    // Additional wait for content to fully load
-    await page.waitForTimeout(3000);
-
-    // Get the page content - for .txt files it's in a <pre> tag or body text
-    const content = await page.evaluate(`
-      (() => {
-        const pre = document.querySelector('pre');
-        if (pre) return pre.textContent || '';
-        return document.body.innerText || '';
-      })()
-    `) as string;
-
-    await context.close();
-    console.error(`Playwright: got ${content.length} chars from ${url}`);
-    return content;
-  } finally {
-    await browser.close();
+    const retryResponse = await fetch(url, { headers, signal: AbortSignal.timeout(60000) });
+    if (retryResponse.ok) {
+      const text = await retryResponse.text();
+      if (text.includes('challenge-platform') || text.includes('Just a moment')) {
+        throw new Error(`Cloudflare challenge at ${url} — cannot bypass without a browser engine`);
+      }
+      return text;
+    }
+    throw new Error(`HTTP ${retryResponse.status} ${retryResponse.statusText} for ${url}`);
   }
 }
 
@@ -180,8 +162,8 @@ function categorizeFunction(name: string): { category: string; namespace?: strin
 /**
  * UESP globalfuncs.txt actual format:
  *   FunctionName(param1, param2) = 'address'
- *   	source/file.lua:123 -- function(param1, param2)
- *   	source/file2.lua:456 -- function(param1, param2)
+ *   \tsource/file.lua:123 -- function(param1, param2)
+ *   \tsource/file2.lua:456 -- function(param1, param2)
  *
  * Lines starting with a letter are function definitions.
  * Indented lines below are source file references.
